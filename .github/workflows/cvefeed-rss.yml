@@ -1,4 +1,4 @@
-name: CVE漏洞监控系统
+name: CVEFeed
 
 on:
   schedule:
