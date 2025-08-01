@@ -1,88 +1,52 @@
-name: CVEFeed
+name: CVE Monitor
 
 on:
+  push:
+    branches: [ main ]
   schedule:
-    # 从UTC时间16时开始（对应UTC+8的0时），每15分钟执行一次数据拉取
-    - cron: '*/15 16-23,0-15 * * *'
-    # 每天UTC时间2时执行（对应UTC+8的10时）发送完整报告
-    - cron: '0 2 * * *'
-  workflow_dispatch:  # 允许手动触发
+    # 每15分钟运行一次
+    - cron: '*/15 * * * *'
 
 jobs:
-  run_monitor:
+  run-monitor:
     runs-on: ubuntu-latest
-    environment: production
-    
     steps:
-      - name: 检出代码
-        uses: actions/checkout@v3
-        with:
-          fetch-depth: 0
-      
-      - name: 设置Python环境
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.9'
-      
-      - name: 安装依赖
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests feedparser python-dotenv
-          echo "依赖安装完成"
-      
-      - name: 检查是否存在JSON数据文件
-        id: check_data_file
-        run: |
-          if [ -f "cve_vulnerabilities.json" ]; then
-            echo "数据文件已存在"
-            echo "file_exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "数据文件不存在，将创建新文件"
-            echo "file_exists=false" >> $GITHUB_OUTPUT
-          fi
-      
-      - name: 从Git历史恢复JSON数据文件（如果存在）
-        if: steps.check_data_file.outputs.file_exists == 'false'
-        run: |
-          if git rev-parse HEAD~1:./cve_vulnerabilities.json >/dev/null 2>&1; then
-            echo "从Git历史恢复数据文件"
-            git checkout HEAD~1 -- ./cve_vulnerabilities.json
-          else
-            echo "Git历史中没有数据文件，将初始化新文件"
-          fi
-      
-      - name: 执行数据拉取和处理
-        env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
-          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          RUN_MODE: "fetch_data"
-        run: |
-          echo "开始执行数据拉取和处理..."
-          python cve-rss.py
-          echo "数据拉取和处理完成"
-      
-      - name: 提交更新的数据文件
-        run: |
-          echo "检查数据文件是否有更新..."
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@github.com"
-          git add cve_vulnerabilities.json
-          git commit -m "Update CVE data: $(date +'%Y-%m-%d %H:%M:%S')" || echo "No changes to commit"
-          git push || echo "推送失败，可能没有权限或没有更改"
-      
-      - name: 每日UTC+8时间10时发送完整报告
-        if: github.event.schedule == '0 2 * * *'
-        env:
-          SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT }}
-          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
-          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
-          RECIPIENT_EMAIL: ${{ secrets.RECIPIENT_EMAIL }}
-          RUN_MODE: "send_email"
-        run: |
-          echo "发送每日完整报告..."
-          python cve-rss.py
-          echo "报告发送完成"
+    - uses: actions/checkout@v2
+
+    - name: Set up Python
+      uses: actions/setup-python@v2
+      with:
+        python-version: '3.x'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install feedparser schedule
+
+    - name: Configure email
+      run: |
+        # 从GitHub Secrets中获取邮件配置
+        cat > email_config.json << EOF
+        {
+            "smtp_server": "${{ secrets.SMTP_SERVER }}",
+            "smtp_port": ${{ secrets.SMTP_PORT }},
+            "use_tls": true,
+            "username": "${{ secrets.EMAIL_USERNAME }}",
+            "password": "${{ secrets.EMAIL_PASSWORD }}",
+            "from": "${{ secrets.EMAIL_FROM }}",
+            "to": ["${{ secrets.EMAIL_TO }}"]
+        }
+        EOF
+
+    - name: Run CVE Monitor
+      run: python cve_rss_monitor.py --email-config email_config.json
+
+    - name: Commit and push data
+      run: |
+        git config --global user.name 'github-actions'
+        git config --global user.email 'github-actions@github.com'
+        git add data/
+        git add log/
+        git commit -m 'Update reports and logs'
+        git push
+      continue-on-error: true
